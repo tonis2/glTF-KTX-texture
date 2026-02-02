@@ -350,20 +350,24 @@ class glTF2ExportUserExtension:
 
         # Create the KTX2 image for the cubemap
         if export_settings['gltf_format'] == 'GLTF_SEPARATE':
-            # For separate files, use URI with ImageData (will be written to file)
-            from .ktx2_encode import KTX2ImageData
-            image_data = KTX2ImageData(
-                data=ktx2_bytes,
-                mime_type="image/ktx2",
-                name="environment_cubemap"
-            )
+            # For separate files, write KTX2 file directly and use filename as URI
+            import os
+            filepath = export_settings.get('gltf_filepath', '')
+            output_dir = os.path.dirname(filepath)
+            ktx2_filename = "environment_cubemap.ktx2"
+            ktx2_filepath = os.path.join(output_dir, ktx2_filename)
+
+            # Write KTX2 file
+            with open(ktx2_filepath, 'wb') as f:
+                f.write(ktx2_bytes)
+
             env_image = gltf2_io.Image(
                 buffer_view=None,
                 extensions=None,
                 extras=None,
                 mime_type="image/ktx2",
                 name="environment_cubemap",
-                uri=image_data
+                uri=ktx2_filename
             )
         else:
             # For GLB/embedded formats, we must use base64 data URI
@@ -524,6 +528,19 @@ class glTF2ImportUserExtension:
 
         # Get KTX2 binary data
         ktx2_data = BinaryData.get_image_data(gltf, img_idx)
+
+        # If BinaryData returns None, try loading from URI (for separate files)
+        if ktx2_data is None and gltf_img.uri:
+            uri = gltf_img.uri
+            if not uri.startswith('data:'):
+                # It's a file URI, load from disk
+                import os
+                gltf_dir = os.path.dirname(gltf.filename)
+                file_path = os.path.join(gltf_dir, uri)
+                if os.path.exists(file_path):
+                    with open(file_path, 'rb') as f:
+                        ktx2_data = f.read()
+
         if ktx2_data is None:
             gltf.log.warning(f"Could not get KTX2 data for image {img_idx}")
             return

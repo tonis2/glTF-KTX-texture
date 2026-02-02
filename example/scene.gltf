@@ -54,9 +54,9 @@
 		{ "extensions": { "KHR_environment_map": { "source": 3 } }, "name": "environment_cubemap" }
 	],
 	"images": [
-		{ "bufferView": 4, "mimeType": "image/ktx2", "name": "Image" },
-		{ "bufferView": 5, "mimeType": "image/ktx2", "name": "Image" },
-		{ "bufferView": 6, "mimeType": "image/ktx2", "name": "Image" },
+		{ "bufferView": 4, "mimeType": "image/ktx2", "name": "Ucupaint Cube Normal" },
+		{ "bufferView": 5, "mimeType": "image/ktx2", "name": "Ucupaint Cube Color" },
+		{ "bufferView": 6, "mimeType": "image/ktx2", "name": "Ucupaint Cube Roughness" },
 		{ "mimeType": "image/ktx2", "name": "environment_cubemap", "bufferView": 11 }
 	],
 	"accessors": [

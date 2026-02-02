@@ -245,12 +245,32 @@ def encode_image_to_ktx2(gltf_image, compression_mode, quality_level, generate_m
             name = name.rsplit('.', 1)[0]
 
         if export_settings['gltf_format'] == 'GLTF_SEPARATE':
-            # For separate files, use URI
-            image_data = KTX2ImageData(
-                data=ktx2_bytes,
-                mime_type="image/ktx2",
-                name=name
-            )
+            # For separate files, write KTX2 file directly and use filename as URI
+            filepath = export_settings.get('gltf_filepath', '')
+            output_dir = os.path.dirname(filepath)
+
+            # Ensure output directory exists (might not be created yet at this stage)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+
+            # Track written filenames to avoid duplicates
+            if 'ktx2_written_files' not in export_settings:
+                export_settings['ktx2_written_files'] = set()
+
+            # Generate unique filename
+            base_name = name
+            ktx2_filename = f"{base_name}.ktx2"
+            counter = 1
+            while ktx2_filename in export_settings['ktx2_written_files']:
+                ktx2_filename = f"{base_name}_{counter}.ktx2"
+                counter += 1
+            export_settings['ktx2_written_files'].add(ktx2_filename)
+
+            ktx2_filepath = os.path.join(output_dir, ktx2_filename) if output_dir else ktx2_filename
+
+            # Write KTX2 file
+            with open(ktx2_filepath, 'wb') as f:
+                f.write(ktx2_bytes)
 
             ktx2_image = gltf2_io.Image(
                 buffer_view=None,
@@ -258,7 +278,7 @@ def encode_image_to_ktx2(gltf_image, compression_mode, quality_level, generate_m
                 extras=None,
                 mime_type="image/ktx2",
                 name=name,
-                uri=image_data
+                uri=ktx2_filename
             )
         else:
             # For embedded (GLB), use buffer_view

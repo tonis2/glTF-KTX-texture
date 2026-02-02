@@ -384,7 +384,6 @@ def cubemap_faces_to_equirectangular(face_files, gltf, output_width=2048):
             w, h = img.size
             if face_size is None:
                 face_size = w
-            gltf.log.info(f"  Face {i}: {os.path.basename(face_path)} ({w}x{h})")
             pixels = np.array(img.pixels[:]).reshape((h, w, 4))
             # Blender stores bottom-to-top, flip to top-to-bottom
             pixels = np.flipud(pixels)
@@ -495,7 +494,6 @@ def cubemap_faces_to_equirectangular(face_files, gltf, output_width=2048):
         blender_image.pixels = output.flatten().tolist()
         blender_image.pack()
 
-        gltf.log.info(f"Created equirectangular image: {output_width}x{output_height}")
         return blender_image
 
     except Exception as e:
@@ -545,5 +543,3 @@ def setup_world_environment(blender_image, intensity, gltf):
     links.new(node_tex_coord.outputs['Generated'], node_env_tex.inputs['Vector'])
     links.new(node_env_tex.outputs['Color'], node_background.inputs['Color'])
     links.new(node_background.outputs['Background'], node_output.inputs['Surface'])
-
-    gltf.log.info(f"Set up world environment with intensity {intensity}")
