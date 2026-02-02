@@ -115,9 +115,6 @@ class KTX2_OT_install_tools(bpy.types.Operator):
 
         return {'FINISHED'}
 
-    def invoke(self, context, event):
-        return context.window_manager.invoke_confirm(self, event)
-
 
 class KTX2_OT_check_installation(bpy.types.Operator):
     """Check if KTX tools are installed"""
