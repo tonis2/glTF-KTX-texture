@@ -328,8 +328,8 @@ class glTF2ExportUserExtension:
             return
 
         # Create the KTX2 image for the cubemap
-        # Use URI with ImageData for separate files, or buffer_view for GLB
         if export_settings['gltf_format'] == 'GLTF_SEPARATE':
+            # For separate files, use URI with ImageData (will be written to file)
             from .ktx2_encode import KTX2ImageData
             image_data = KTX2ImageData(
                 data=ktx2_bytes,
@@ -345,17 +345,20 @@ class glTF2ExportUserExtension:
                 uri=image_data
             )
         else:
-            # For GLB, use buffer_view like regular images
-            from io_scene_gltf2.io.exp.binary_data import BinaryData
-            buffer_view = BinaryData(data=ktx2_bytes)
+            # For GLB/embedded formats, we must use base64 data URI
+            # Note: Using buffer_view with BinaryData doesn't work in gather_gltf_extensions_hook
+            # because BinaryData processing has already completed at this stage
+            import base64
+            b64_data = base64.b64encode(ktx2_bytes).decode('ascii')
+            data_uri = f"data:image/ktx2;base64,{b64_data}"
 
             env_image = gltf2_io.Image(
-                buffer_view=buffer_view,
+                buffer_view=None,
                 extensions=None,
                 extras=None,
                 mime_type="image/ktx2",
                 name="environment_cubemap",
-                uri=None
+                uri=data_uri
             )
 
         # Add image to glTF images array
@@ -513,12 +516,32 @@ def register():
     bpy.types.Scene.KTX2ExportProperties = bpy.props.PointerProperty(type=KTX2ExportProperties)
     bpy.types.Scene.KTX2ImportProperties = bpy.props.PointerProperty(type=KTX2ImportProperties)
 
+    # Register UI panels with glTF addon (with duplicate check)
+    try:
+        from io_scene_gltf2 import exporter_extension_layout_draw, importer_extension_layout_draw
+        if 'KTX2 Textures' not in exporter_extension_layout_draw:
+            exporter_extension_layout_draw['KTX2 Textures'] = draw_export
+        if 'KTX2 Textures' not in importer_extension_layout_draw:
+            importer_extension_layout_draw['KTX2 Textures'] = draw_import
+    except ImportError:
+        print("glTF-Blender-IO addon not found. KTX2 extension panels will not be available.")
+
     # Check tools availability on load
     check_tools_available()
 
 
 def unregister():
     """Unregister addon classes and UI."""
+    # Unregister UI panels from glTF addon
+    try:
+        from io_scene_gltf2 import exporter_extension_layout_draw, importer_extension_layout_draw
+        if 'KTX2 Textures' in exporter_extension_layout_draw:
+            del exporter_extension_layout_draw['KTX2 Textures']
+        if 'KTX2 Textures' in importer_extension_layout_draw:
+            del importer_extension_layout_draw['KTX2 Textures']
+    except (ImportError, KeyError):
+        pass
+
     del bpy.types.Scene.KTX2ExportProperties
     del bpy.types.Scene.KTX2ImportProperties
 
