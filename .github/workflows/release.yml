@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'    # v1.0.0, v0.2.1, etc.
+      - '[0-9]*'  # 1.0.0, 0.2.1, etc.
+  workflow_dispatch:  # Manual trigger for testing
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.0.0)'
+        required: true
+        default: 'v0.0.0'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Required for creating releases
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build Blender extension
+        run: |
+          mkdir -p gltf_ktx2_extension
+          # Copy all Python files and other extension files into the folder
+          find . -maxdepth 1 -type f \( -name "*.py" -o -name "*.json" \) -exec cp {} gltf_ktx2_extension/ \;
+          # Zip the folder, excluding pycache
+          zip -r gltf_ktx2_extension.zip gltf_ktx2_extension -x "*/__pycache__/*"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Release ${{ steps.version.outputs.version }}
+          files: gltf_ktx2_extension.zip
+          generate_release_notes: true
