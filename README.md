@@ -18,11 +18,11 @@ Blender addon that adds KTX2 texture support to glTF export/import.
 ## Requirements
 
 - Blender 4.0+
-- [KTX-Software tools](https://github.com/KhronosGroup/KTX-Software/releases/) (downloaded automatically on first use, ~7MB)
+- [KTX-Software tools](https://github.com/KhronosGroup/KTX-Software/releases/) (downloaded automatically on first use, can take few minutes ~7MB)
 
 ## Installation
 
-1. Download or clone this repository
+1. Download the latest [gltf_ktx2_extension.zip](https://github.com/tonis2/glTF-KTX-texture/tags)
 2. In Blender: Edit > Preferences > Add-ons > Install
 3. Select the addon folder or zip file
 4. Enable "glTF KTX2 Texture Extension"
