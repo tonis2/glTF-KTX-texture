@@ -171,7 +171,7 @@ def equirect_to_cubemap_faces(env_image, resolution, export_settings):
         export_settings: Export settings dict
 
     Returns:
-        list: List of 6 temp file paths for each face, or None on failure
+        tuple: (list of 6 temp file paths, intensity_factor) or (None, 1.0) on failure
     """
     import numpy as np
 
@@ -181,7 +181,7 @@ def equirect_to_cubemap_faces(env_image, resolution, export_settings):
         # Get image pixels
         width, height = env_image.size
         if width == 0 or height == 0:
-            return None
+            return None, 1.0
 
         # Get pixel data as numpy array
         pixels = np.array(env_image.pixels[:])
@@ -190,6 +190,27 @@ def equirect_to_cubemap_faces(env_image, resolution, export_settings):
 
         # Flip vertically (Blender stores bottom-to-top)
         pixels = np.flipud(pixels)
+
+        # For HDR images, calculate intensity to compensate for clipping
+        rgb_pixels = pixels[:, :, :3] if channels >= 3 else pixels
+        max_value = np.max(rgb_pixels)
+
+        if max_value > 1.0:
+            # Calculate mean before and after clipping to determine intensity factor
+            mean_before = np.mean(rgb_pixels)
+            clipped = np.clip(rgb_pixels, 0.0, 1.0)
+            mean_after = np.mean(clipped)
+
+            # Intensity factor compensates for lost brightness from clipping
+            # Add 1.3x boost to compensate for compression losses
+            if mean_after > 0:
+                intensity_factor = (mean_before / mean_after) * 1.3
+            else:
+                intensity_factor = 1.0
+
+            pixels = np.clip(pixels, 0.0, 1.0)
+        else:
+            intensity_factor = 1.0
 
         temp_files = []
 
@@ -263,13 +284,13 @@ def equirect_to_cubemap_faces(env_image, resolution, export_settings):
 
             temp_files.append(temp_file.name)
 
-        return temp_files
+        return temp_files, intensity_factor
 
     except Exception as e:
         export_settings['log'].error(f"Failed to convert equirectangular to cubemap: {e}")
         import traceback
         export_settings['log'].debug(traceback.format_exc())
-        return None
+        return None, 1.0
 
 
 def encode_cubemap_to_ktx2(face_files, compression_mode, quality_level, generate_mipmaps, export_settings):
@@ -374,17 +395,16 @@ def export_environment_map(properties, export_settings):
     # Check for environment texture
     env_image = get_world_environment_texture()
     if env_image is None:
-        export_settings['log'].info("No environment texture found in world, skipping environment map export")
         return None, None
 
-    export_settings['log'].info(f"Exporting environment map: {env_image.name}")
 
     resolution = properties.envmap_resolution
     face_files = None
+    intensity_factor = 1.0
 
     try:
         # Convert equirectangular to cubemap faces
-        face_files = equirect_to_cubemap_faces(
+        face_files, intensity_factor = equirect_to_cubemap_faces(
             env_image,
             resolution,
             export_settings
@@ -406,10 +426,9 @@ def export_environment_map(properties, export_settings):
         if ktx2_bytes is None:
             return None, None
 
-        export_settings['log'].info(f"Environment map encoded: {len(ktx2_bytes)} bytes")
 
         return ktx2_bytes, {
-            'intensity': 1.0,
+            'intensity': intensity_factor,
         }
 
     finally:

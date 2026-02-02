@@ -22,6 +22,27 @@ The tools are automatically downloaded on first use (~7MB).
 """
 
 import bpy
+import importlib
+
+# Debug: Print when module is loaded to verify code is up to date
+print("KTX2 Extension: Module loaded (version with post-process debugging)")
+
+
+def _reload_submodules():
+    """Reload all submodules to pick up code changes during development."""
+    import sys
+
+    # List of submodule names (without package prefix)
+    submodule_names = ['ktx_tools', 'ktx2_encode', 'ktx2_decode', 'ktx2_envmap_encode', 'ktx2_envmap_decode']
+
+    # Get the package name (this module's package)
+    package = __name__
+
+    for name in submodule_names:
+        full_name = f"{package}.{name}"
+        if full_name in sys.modules:
+            print(f"KTX2 Extension: Reloading {name}")
+            importlib.reload(sys.modules[full_name])
 
 bl_info = {
     "name": "glTF KTX2 Texture Extension",
@@ -315,11 +336,11 @@ class glTF2ExportUserExtension:
             export_settings['log'].warning("Environment map export disabled: KTX tools not installed")
             return
 
-        from . import ktx2_envmap
+        from . import ktx2_envmap_encode
         from io_scene_gltf2.io.com import gltf2_io
 
         # Export the environment map
-        ktx2_bytes, env_data = ktx2_envmap.export_environment_map(
+        ktx2_bytes, env_data = ktx2_envmap_encode.export_environment_map(
             self.properties,
             export_settings
         )
@@ -367,13 +388,30 @@ class glTF2ExportUserExtension:
         gltf.images.append(env_image)
         cubemap_image_index = len(gltf.images) - 1
 
+        # Mark that we exported an environment map and schedule post-processing
+        export_settings['ktx2_envmap_exported'] = True
+
+        # Schedule post-processing to convert data URI to bufferView
+        filepath = export_settings.get('gltf_filepath', '')
+        gltf_format = export_settings['gltf_format']
+        import sys
+        print(f"KTX2 Extension: Export format={gltf_format}, filepath={filepath}")
+        sys.stdout.flush()
+
+        # Post-process for formats that use binary buffers
+        if gltf_format in ('GLB', 'GLTF_EMBEDDED', 'GLTF_SEPARATE'):
+            _schedule_post_process(filepath, gltf_format)
+
         # Create texture referencing the cubemap image by index
+        # Use KHR_environment_map extension since cubemap is always KTX2 in this extension
         env_texture = gltf2_io.Texture(
-            extensions=None,
+            extensions={
+                "KHR_environment_map": {"source": cubemap_image_index}
+            },
             extras=None,
             name="environment_cubemap",
             sampler=None,
-            source=cubemap_image_index  # Use index, not object
+            source=None  # No fallback source, using extension only
         )
 
         if gltf.textures is None:
@@ -406,8 +444,14 @@ class glTF2ExportUserExtension:
             gltf.extensions_used = []
         if "KHR_environment_map" not in gltf.extensions_used:
             gltf.extensions_used.append("KHR_environment_map")
+        sys.stdout.flush()
 
-        export_settings['log'].info("Added KHR_environment_map extension with cubemap")
+
+class _ImportExtensionInfo:
+    """Simple class to hold extension info for the importer."""
+    def __init__(self, name, required=True):
+        self.name = name
+        self.required = required
 
 
 class glTF2ImportUserExtension:
@@ -416,9 +460,14 @@ class glTF2ImportUserExtension:
     def __init__(self):
         self.properties = bpy.context.scene.KTX2ImportProperties
         self._decoded_images = {}  # Cache decoded images by index
+        # Declare that we handle KHR_texture_basisu and KHR_environment_map extensions
+        self.extensions = [
+            _ImportExtensionInfo(glTF_extension_name, required=True),
+            _ImportExtensionInfo("KHR_environment_map", required=False)
+        ]
 
     def gather_import_texture_before_hook(self, gltf_texture, mh, tex_info, location, label,
-                                          color_socket, alpha_socket, is_data):
+                                          color_socket, alpha_socket, is_data, gltf):
         """Hook called before importing a texture - select KTX2 source if available."""
         if not self.properties.enabled:
             return
@@ -434,8 +483,6 @@ class glTF2ImportUserExtension:
 
         if ktx2_source is None:
             return
-
-        gltf = mh.gltf
 
         # Check user preference for KTX2 vs fallback
         if self.properties.prefer_ktx2:
@@ -492,22 +539,72 @@ class glTF2ImportUserExtension:
             return
 
         # Create Blender image from decoded PNG data
+        # We need to write to a temp file and load it, since pack() expects raw pixels
+        import tempfile
+        import os
+
         img_name = gltf_img.name or f'KTX2_Image_{img_idx}'
 
-        blender_image = bpy.data.images.new(img_name, 8, 8)
-        blender_image.pack(data=png_data, data_len=len(png_data))
-        blender_image.source = 'FILE'
-        blender_image.alpha_mode = 'CHANNEL_PACKED'
+        temp_png = None
+        try:
+            # Write PNG to temp file
+            temp_png = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+            temp_png.write(png_data)
+            temp_png.close()
 
-        # Mark as already processed so the importer doesn't try again
-        gltf_img.blender_image_name = blender_image.name
-        self._decoded_images[img_idx] = blender_image.name
+            # Load the image from temp file
+            blender_image = bpy.data.images.load(temp_png.name)
+            blender_image.name = img_name
+            blender_image.alpha_mode = 'CHANNEL_PACKED'
 
-        gltf.log.info(f"Decoded KTX2 image: {img_name}")
+            # Pack the image into the .blend file so the temp file can be deleted
+            blender_image.pack()
+
+            # Mark as already processed so the importer doesn't try again
+            gltf_img.blender_image_name = blender_image.name
+            self._decoded_images[img_idx] = blender_image.name
+
+            # Clear the buffer_view so the main importer's create_from_data()
+            # returns None and doesn't overwrite our blender_image_name
+            gltf_img.buffer_view = None
+            gltf_img.uri = None
+
+        finally:
+            # Clean up temp file
+            if temp_png:
+                try:
+                    os.unlink(temp_png.name)
+                except OSError:
+                    pass
+
+    def gather_import_scene_after_nodes_hook(self, gltf_scene, blender_scene, gltf):
+        """Hook called after scene nodes are created - import environment map."""
+        if not self.properties.enabled:
+            return
+
+        # Check for KHR_environment_map extension
+        if gltf.data.extensions is None:
+            return
+
+        env_map_ext = gltf.data.extensions.get('KHR_environment_map')
+        if env_map_ext is None:
+            return
+
+        from . import ktx2_envmap_decode
+
+        try:
+            ktx2_envmap_decode.import_environment_map(env_map_ext, gltf)
+        except Exception as e:
+            gltf.log.error(f"Failed to import environment map: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 def register():
     """Register addon classes and UI."""
+    # Reload submodules to pick up code changes (for development)
+    _reload_submodules()
+
     bpy.utils.register_class(KTX2_OT_install_tools)
     bpy.utils.register_class(KTX2_OT_check_installation)
     bpy.utils.register_class(KTX2ExportProperties)
@@ -553,9 +650,424 @@ def unregister():
 
 def glTF2_pre_export_callback(export_settings):
     """Called before export starts."""
-    pass
+    # Clear the flag for environment map export
+    export_settings['ktx2_envmap_exported'] = False
 
 
 def glTF2_post_export_callback(export_settings):
-    """Called after export completes."""
-    pass
+    """Called after export completes. Post-process GLB to fix environment map bufferView."""
+    _run_post_export(export_settings)
+
+
+def _run_post_export(export_settings):
+    """Run post-export processing."""
+    # Only process if we exported an environment map in GLB format
+    if not export_settings.get('ktx2_envmap_exported', False):
+        return
+
+    if export_settings['gltf_format'] not in ('GLB', 'GLTF_EMBEDDED'):
+        return
+
+    filepath = export_settings['gltf_filepath']
+    if not filepath.lower().endswith('.glb'):
+        return
+
+    try:
+        _post_process_glb_envmap(filepath, export_settings)
+    except Exception as e:
+        print(f"KTX2 Extension: Failed to post-process GLB for environment map: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+# Global storage for pending post-processing
+_pending_post_process = None
+_post_process_retries = 0
+_MAX_POST_PROCESS_RETRIES = 50  # 50 * 0.2s = 10 seconds max wait
+
+
+def _schedule_post_process(filepath, gltf_format):
+    """Schedule GLB post-processing using a timer."""
+    global _pending_post_process, _post_process_retries
+    import sys
+
+    print(f"KTX2 Extension: Scheduling post-process for {filepath} (format={gltf_format})")
+    sys.stdout.flush()
+
+    _pending_post_process = {
+        'filepath': filepath,
+        'gltf_format': gltf_format
+    }
+    _post_process_retries = 0  # Reset retry counter
+    # Register timer to run after export completes
+    try:
+        bpy.app.timers.register(_timer_post_process, first_interval=0.5)
+        print("KTX2 Extension: Timer registered successfully")
+        sys.stdout.flush()
+    except Exception as e:
+        print(f"KTX2 Extension: Failed to register timer: {e}")
+        sys.stdout.flush()
+        import traceback
+        traceback.print_exc()
+
+
+def _timer_post_process():
+    """Timer callback to post-process GLB/GLTF after export."""
+    global _pending_post_process, _post_process_retries
+    import sys
+    import os
+    import time
+
+    print("KTX2 Extension: Timer callback invoked")
+    sys.stdout.flush()
+
+    if _pending_post_process is None:
+        print("KTX2 Extension: No pending post-process, stopping timer")
+        sys.stdout.flush()
+        _post_process_retries = 0
+        return None  # Stop timer
+
+    filepath = _pending_post_process['filepath']
+    gltf_format = _pending_post_process['gltf_format']
+
+    # Check retry limit
+    if _post_process_retries >= _MAX_POST_PROCESS_RETRIES:
+        print(f"KTX2 Extension: Max retries ({_MAX_POST_PROCESS_RETRIES}) exceeded, giving up")
+        sys.stdout.flush()
+        _pending_post_process = None
+        _post_process_retries = 0
+        return None
+
+    # Check if file exists
+    if not os.path.exists(filepath):
+        print(f"KTX2 Extension: File not found yet, retrying... ({_post_process_retries + 1}/{_MAX_POST_PROCESS_RETRIES})")
+        sys.stdout.flush()
+        _post_process_retries += 1
+        return 0.2  # Try again in 0.2 seconds
+
+    # Check if file is still being written by checking if size is stable
+    try:
+        size1 = os.path.getsize(filepath)
+        time.sleep(0.05)  # Brief pause
+        size2 = os.path.getsize(filepath)
+        if size1 != size2:
+            print(f"KTX2 Extension: File still being written, retrying... ({_post_process_retries + 1}/{_MAX_POST_PROCESS_RETRIES})")
+            sys.stdout.flush()
+            _post_process_retries += 1
+            return 0.2
+    except OSError:
+        _post_process_retries += 1
+        return 0.2
+
+    # File is ready, clear pending state
+    _pending_post_process = None
+    _post_process_retries = 0
+
+    print(f"KTX2 Extension: Timer triggered, processing {filepath}")
+    sys.stdout.flush()
+
+    try:
+        if filepath.lower().endswith('.glb'):
+            _post_process_glb_envmap(filepath, None)
+        elif filepath.lower().endswith('.gltf'):
+            _post_process_gltf_envmap(filepath, gltf_format)
+    except Exception as e:
+        print(f"KTX2 Extension: Failed to post-process for environment map: {e}")
+        import traceback
+        traceback.print_exc()
+
+    return None  # Stop timer
+
+
+def _post_process_glb_envmap(filepath, export_settings):
+    """
+    Post-process a GLB file to convert environment map data URI to bufferView.
+
+    GLB format:
+    - 12 byte header: magic (4), version (4), length (4)
+    - JSON chunk: length (4), type "JSON" (4), json data (padded to 4 bytes)
+    - Binary chunk: length (4), type "BIN\0" (4), binary data (padded to 4 bytes)
+    """
+    import json
+    import base64
+    import struct
+
+    with open(filepath, 'rb') as f:
+        glb_data = f.read()
+
+    # Parse GLB header
+    magic, version, total_length = struct.unpack('<III', glb_data[:12])
+    if magic != 0x46546C67:  # 'glTF' in little-endian
+        print("KTX2 Extension: Not a valid GLB file")
+        return
+
+    # Parse JSON chunk
+    json_chunk_length, json_chunk_type = struct.unpack('<II', glb_data[12:20])
+    if json_chunk_type != 0x4E4F534A:  # 'JSON' in little-endian
+        print("KTX2 Extension: Invalid JSON chunk")
+        return
+
+    json_data = glb_data[20:20 + json_chunk_length].decode('utf-8').rstrip('\x00 ')
+    gltf = json.loads(json_data)
+
+    # Parse binary chunk (if exists)
+    bin_chunk_start = 20 + json_chunk_length
+    # Align to 4 bytes
+    if bin_chunk_start % 4 != 0:
+        bin_chunk_start += 4 - (bin_chunk_start % 4)
+
+    binary_data = bytearray()
+    if bin_chunk_start + 8 <= len(glb_data):
+        bin_chunk_length, bin_chunk_type = struct.unpack('<II', glb_data[bin_chunk_start:bin_chunk_start + 8])
+        if bin_chunk_type == 0x004E4942:  # 'BIN\0' in little-endian
+            binary_data = bytearray(glb_data[bin_chunk_start + 8:bin_chunk_start + 8 + bin_chunk_length])
+
+    # Find images with data URIs that are KTX2
+    images = gltf.get('images', [])
+    modified = False
+
+    for i, image in enumerate(images):
+        uri = image.get('uri', '')
+        if isinstance(uri, str) and uri.startswith('data:image/ktx2;base64,'):
+            # Extract base64 data
+            b64_data = uri[len('data:image/ktx2;base64,'):]
+            ktx2_bytes = base64.b64decode(b64_data)
+
+            # Align binary buffer to 4 bytes before adding new data
+            padding = (4 - len(binary_data) % 4) % 4
+            if padding > 0:
+                binary_data.extend(b'\x00' * padding)
+
+            byte_offset = len(binary_data)
+            binary_data.extend(ktx2_bytes)
+
+            # Create or extend bufferViews
+            if 'bufferViews' not in gltf:
+                gltf['bufferViews'] = []
+
+            buffer_view_index = len(gltf['bufferViews'])
+            gltf['bufferViews'].append({
+                'buffer': 0,
+                'byteOffset': byte_offset,
+                'byteLength': len(ktx2_bytes)
+            })
+
+            # Update image to use bufferView instead of URI
+            del image['uri']
+            image['bufferView'] = buffer_view_index
+            image['mimeType'] = 'image/ktx2'
+
+            modified = True
+
+    if not modified:
+        return
+
+    # Update buffer length
+    if 'buffers' not in gltf or len(gltf['buffers']) == 0:
+        gltf['buffers'] = [{'byteLength': len(binary_data)}]
+    else:
+        gltf['buffers'][0]['byteLength'] = len(binary_data)
+
+    # Rebuild GLB
+    new_json = json.dumps(gltf, separators=(',', ':')).encode('utf-8')
+    # Pad JSON to 4 bytes with spaces
+    json_padding = (4 - len(new_json) % 4) % 4
+    new_json += b' ' * json_padding
+
+    # Pad binary to 4 bytes with zeros
+    bin_padding = (4 - len(binary_data) % 4) % 4
+    binary_data.extend(b'\x00' * bin_padding)
+
+    # Calculate new total length
+    new_total_length = 12 + 8 + len(new_json) + 8 + len(binary_data)
+
+    # Build new GLB
+    new_glb = bytearray()
+    # Header
+    new_glb.extend(struct.pack('<III', 0x46546C67, 2, new_total_length))
+    # JSON chunk
+    new_glb.extend(struct.pack('<II', len(new_json), 0x4E4F534A))
+    new_glb.extend(new_json)
+    # Binary chunk
+    new_glb.extend(struct.pack('<II', len(binary_data), 0x004E4942))
+    new_glb.extend(binary_data)
+
+    # Write back
+    with open(filepath, 'wb') as f:
+        f.write(new_glb)
+
+    print(f"KTX2 Extension: Successfully post-processed GLB, new size: {len(new_glb)} bytes")
+
+
+def _post_process_gltf_envmap(filepath, gltf_format):
+    """
+    Post-process a GLTF file to convert environment map data URI to bufferView.
+
+    Handles both:
+    - GLTF_SEPARATE: JSON + separate .bin file
+    - GLTF_EMBEDDED: JSON with base64-encoded buffer inline
+    """
+    import json
+    import base64
+    import os
+    import sys
+
+    print(f"KTX2 Extension: Post-processing GLTF file: {filepath}")
+    sys.stdout.flush()
+
+    with open(filepath, 'r', encoding='utf-8') as f:
+        gltf = json.load(f)
+
+    # Find images with data URIs that are KTX2
+    images = gltf.get('images', [])
+    modified = False
+    ktx2_data_list = []  # Store data to append to buffer
+
+    for i, image in enumerate(images):
+        uri = image.get('uri', '')
+        if isinstance(uri, str) and uri.startswith('data:image/ktx2;base64,'):
+            # Extract base64 data
+            b64_data = uri[len('data:image/ktx2;base64,'):]
+            ktx2_bytes = base64.b64decode(b64_data)
+            ktx2_data_list.append((i, image, ktx2_bytes))
+            modified = True
+
+    if not modified:
+        print("KTX2 Extension: No KTX2 data URIs found to process")
+        sys.stdout.flush()
+        return
+
+    # Get or create buffer
+    buffers = gltf.get('buffers', [])
+
+    # Determine if we have a separate .bin file or embedded buffer
+    buffer_uri = buffers[0].get('uri', '') if buffers else ''
+    is_embedded = not buffer_uri or buffer_uri.startswith('data:')
+
+    if is_embedded:
+        # GLTF_EMBEDDED: buffer is base64-encoded in the JSON
+        print("KTX2 Extension: Processing embedded buffer format")
+        sys.stdout.flush()
+
+        # Decode existing buffer data (if any)
+        if buffer_uri.startswith('data:'):
+            # Extract base64 data from data URI
+            # Format: data:application/octet-stream;base64,XXXXX
+            comma_idx = buffer_uri.find(',')
+            if comma_idx != -1:
+                existing_b64 = buffer_uri[comma_idx + 1:]
+                binary_data = bytearray(base64.b64decode(existing_b64))
+            else:
+                binary_data = bytearray()
+        elif buffers and buffers[0].get('byteLength', 0) > 0:
+            # Buffer exists but no data yet (shouldn't happen)
+            binary_data = bytearray()
+        else:
+            # No existing buffer
+            binary_data = bytearray()
+            if not buffers:
+                gltf['buffers'] = [{}]
+                buffers = gltf['buffers']
+
+        original_size = len(binary_data)
+
+        # Process each KTX2 image
+        if 'bufferViews' not in gltf:
+            gltf['bufferViews'] = []
+
+        for i, image, ktx2_bytes in ktx2_data_list:
+            # Align binary buffer to 4 bytes before adding new data
+            padding = (4 - len(binary_data) % 4) % 4
+            if padding > 0:
+                binary_data.extend(b'\x00' * padding)
+
+            byte_offset = len(binary_data)
+            binary_data.extend(ktx2_bytes)
+
+            # Create bufferView
+            buffer_view_index = len(gltf['bufferViews'])
+            gltf['bufferViews'].append({
+                'buffer': 0,
+                'byteOffset': byte_offset,
+                'byteLength': len(ktx2_bytes)
+            })
+
+            # Update image to use bufferView instead of URI
+            del image['uri']
+            image['bufferView'] = buffer_view_index
+            image['mimeType'] = 'image/ktx2'
+            sys.stdout.flush()
+
+        # Update buffer with new base64-encoded data
+        new_b64 = base64.b64encode(binary_data).decode('ascii')
+        buffers[0]['uri'] = f"data:application/octet-stream;base64,{new_b64}"
+        buffers[0]['byteLength'] = len(binary_data)
+
+        # Write updated JSON
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(gltf, f, separators=(',', ':'))
+
+        sys.stdout.flush()
+
+    else:
+        # GLTF_SEPARATE: buffer is in a separate .bin file
+        print("KTX2 Extension: Processing separate .bin file format")
+        sys.stdout.flush()
+
+        # Construct the path to the .bin file
+        gltf_dir = os.path.dirname(filepath)
+        bin_path = os.path.join(gltf_dir, buffer_uri)
+
+        if not os.path.exists(bin_path):
+            print(f"KTX2 Extension: Binary file not found: {bin_path}")
+            sys.stdout.flush()
+            return
+
+        # Read existing binary data
+        with open(bin_path, 'rb') as f:
+            binary_data = bytearray(f.read())
+
+        original_size = len(binary_data)
+
+        # Process each KTX2 image
+        if 'bufferViews' not in gltf:
+            gltf['bufferViews'] = []
+
+        for i, image, ktx2_bytes in ktx2_data_list:
+            # Align binary buffer to 4 bytes before adding new data
+            padding = (4 - len(binary_data) % 4) % 4
+            if padding > 0:
+                binary_data.extend(b'\x00' * padding)
+
+            byte_offset = len(binary_data)
+            binary_data.extend(ktx2_bytes)
+
+            # Create bufferView
+            buffer_view_index = len(gltf['bufferViews'])
+            gltf['bufferViews'].append({
+                'buffer': 0,
+                'byteOffset': byte_offset,
+                'byteLength': len(ktx2_bytes)
+            })
+
+            # Update image to use bufferView instead of URI
+            del image['uri']
+            image['bufferView'] = buffer_view_index
+            image['mimeType'] = 'image/ktx2'
+            sys.stdout.flush()
+
+        # Update buffer length
+        buffers[0]['byteLength'] = len(binary_data)
+
+        # Write updated binary file
+        with open(bin_path, 'wb') as f:
+            f.write(binary_data)
+
+        # Write updated JSON
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(gltf, f, separators=(',', ':'))
+
+        print(f"KTX2 Extension: Successfully post-processed GLTF")
+        print(f"  Binary file grew from {original_size} to {len(binary_data)} bytes")
+        print(f"  JSON updated: {filepath}")
+        sys.stdout.flush()

@@ -5,6 +5,7 @@ __pycache__/
 .claude
 # C extensions
 *.so
+bin
 
 # Distribution / packaging
 .Python
