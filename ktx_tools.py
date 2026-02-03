@@ -163,92 +163,64 @@ def download_file(url, dest_path, progress_callback=None):
     import urllib.request
     import urllib.error
     import ssl
-    import http.client
 
-    # Ensure parent directory exists
     dest_path.parent.mkdir(parents=True, exist_ok=True)
 
-    max_redirects = 10
+    try:
+        ssl_context = ssl.create_default_context()
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+            'Accept': '*/*',
+        }
+        request = urllib.request.Request(url, headers=headers)
+        response = urllib.request.urlopen(request, timeout=120, context=ssl_context)
 
-    for redirect_count in range(max_redirects):
-        try:
-            # Create SSL context
-            ssl_context = ssl.create_default_context()
+        content_type = response.getheader('Content-Type', '')
+        if 'text/html' in content_type.lower():
+            print(f"Received HTML instead of binary (Content-Type: {content_type})")
+            response.close()
+            return False
 
-            # Create a request with a browser-like user agent
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-                'Accept': '*/*',
-            }
-            request = urllib.request.Request(url, headers=headers)
+        total_size = response.getheader('Content-Length')
+        total_size = int(total_size) if total_size else None
 
-            # Open URL
-            response = urllib.request.urlopen(request, timeout=120, context=ssl_context)
+        print(f"Downloading {total_size // 1024 // 1024 if total_size else '?'}MB...")
 
-            # Check for redirect in response URL
-            final_url = response.geturl()
-            if final_url != url:
-                print(f"Redirected to: {final_url[:80]}...")
+        downloaded = 0
+        chunk_size = 65536
 
-            # Check content type
-            content_type = response.getheader('Content-Type', '')
-            if 'text/html' in content_type.lower():
-                print(f"Received HTML instead of binary (Content-Type: {content_type})")
-                response.close()
+        with open(dest_path, 'wb') as f:
+            while True:
+                chunk = response.read(chunk_size)
+                if not chunk:
+                    break
+                f.write(chunk)
+                downloaded += len(chunk)
+                if progress_callback and total_size:
+                    progress_callback(downloaded, total_size)
+
+        response.close()
+
+        # Verify we got a valid file (not HTML)
+        with open(dest_path, 'rb') as f:
+            header = f.read(16)
+            if header.startswith(b'<!') or header.startswith(b'<html') or header.startswith(b'<HTML'):
+                print("Downloaded file appears to be HTML, not the expected archive")
+                return False
+            if str(dest_path).endswith('.tar.bz2') and not header.startswith(b'BZ'):
+                print(f"Downloaded file does not appear to be bzip2 (header: {header[:4]})")
                 return False
 
-            total_size = response.getheader('Content-Length')
-            total_size = int(total_size) if total_size else None
+        print(f"Download complete: {downloaded // 1024}KB")
+        return True
 
-            print(f"Downloading {total_size // 1024 // 1024 if total_size else '?'}MB...")
+    except urllib.error.HTTPError as e:
+        print(f"HTTP Error: {e.code} {e.reason}")
+        return False
 
-            downloaded = 0
-            chunk_size = 65536  # 64KB chunks for faster download
-
-            with open(dest_path, 'wb') as f:
-                while True:
-                    chunk = response.read(chunk_size)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if progress_callback and total_size:
-                        progress_callback(downloaded, total_size)
-
-            response.close()
-
-            # Verify we got a valid file (not HTML)
-            with open(dest_path, 'rb') as f:
-                header = f.read(16)
-                if header.startswith(b'<!') or header.startswith(b'<html') or header.startswith(b'<HTML'):
-                    print("Downloaded file appears to be HTML, not the expected archive")
-                    return False
-                # Check for bzip2 magic number
-                if dest_path.suffix == '.bz2' or str(dest_path).endswith('.tar.bz2'):
-                    if not header.startswith(b'BZ'):
-                        print(f"Downloaded file does not appear to be bzip2 (header: {header[:4]})")
-                        return False
-
-            print(f"Download complete: {downloaded // 1024}KB")
-            return True
-
-        except urllib.error.HTTPError as e:
-            if e.code in (301, 302, 303, 307, 308):
-                # Manual redirect handling
-                redirect_url = e.headers.get('Location')
-                if redirect_url:
-                    print(f"Following redirect ({e.code}) to: {redirect_url[:80]}...")
-                    url = redirect_url
-                    continue
-            print(f"HTTP Error: {e.code} {e.reason}")
-            return False
-
-        except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
-            print(f"Download failed: {e}")
-            return False
-
-    print("Too many redirects")
-    return False
+    except (urllib.error.URLError, OSError) as e:
+        print(f"Download failed: {e}")
+        return False
 
 
 def extract_linux_archive(archive_path, tools_dir):
