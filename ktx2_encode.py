@@ -190,16 +190,18 @@ def save_blender_image_to_temp(blender_image, export_settings):
         return None
 
 
-def encode_image_to_ktx2(gltf_image, compression_mode, quality_level, generate_mipmaps, export_settings):
+def encode_image_to_ktx2(gltf_image, target_format, compression_mode, quality_level, generate_mipmaps, export_settings, astc_block_size='6x6'):
     """
-    Encode a glTF image to KTX2 format with Basis Universal compression.
+    Encode a glTF image to KTX2 format.
 
     Args:
         gltf_image: The gltf2_io.Image object to encode
-        compression_mode: 'ETC1S' or 'UASTC'
+        target_format: 'BASISU', 'BC7', 'ASTC', or 'ETC2'
+        compression_mode: 'ETC1S' or 'UASTC' (for BASISU)
         quality_level: Quality level (1-255 for ETC1S, 0-4 for UASTC)
         generate_mipmaps: Whether to generate mipmaps
         export_settings: Export settings dict
+        astc_block_size: ASTC block size ('4x4', '5x5', '6x6', '8x8')
 
     Returns:
         gltf2_io.Image: New Image object with KTX2 data, or None on failure
@@ -222,12 +224,21 @@ def encode_image_to_ktx2(gltf_image, compression_mode, quality_level, generate_m
 
         # Prepare encoding options
         options = {
+            'target_format': target_format,
             'format': compression_mode,
             'quality': quality_level if compression_mode == 'ETC1S' else min(quality_level // 64, 4),
-            'mipmaps': generate_mipmaps
+            'mipmaps': generate_mipmaps,
+            'astc_block_size': astc_block_size,
         }
 
-        # Run toktx
+        # Log the target format for debugging
+        format_names = {
+            'BASISU': 'Basis Universal',
+            'ASTC': 'Native ASTC',
+        }
+        export_settings['log'].info(f"Encoding to {format_names.get(target_format, target_format)}")
+
+        # Run toktx (or ktx for native formats)
         success, error = ktx_tools.run_toktx(temp_png, temp_ktx2_path, options)
 
         if not success:

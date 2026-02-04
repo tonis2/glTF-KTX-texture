@@ -525,12 +525,20 @@ def run_toktx(input_path, output_path, options=None):
         input_path: Path to input image (PNG, JPEG, etc.)
         output_path: Path for output KTX2 file
         options: Dict of options:
-            - format: 'ETC1S' or 'UASTC'
+            - target_format: 'BASISU' or 'ASTC'
+            - format: 'ETC1S' or 'UASTC' (for BASISU)
             - quality: 1-255 for ETC1S, 0-4 for UASTC
             - mipmaps: bool
+            - astc_block_size: '4x4', '5x5', '6x6', '8x8' (for ASTC)
 
     Returns:
         tuple: (success: bool, error_message: str or None)
+
+    Notes on target formats:
+        - BASISU: Basis Universal (ETC1S or UASTC) - universal, transcodes at runtime
+                  to any GPU format (BC7, ASTC, ETC2, etc.)
+        - ASTC: Native ASTC format - direct GPU upload on ASTC-capable hardware
+                (mobile devices, Apple Silicon). No transcoding needed.
     """
     toktx_path = get_tool_path('toktx')
     if not toktx_path:
@@ -540,19 +548,27 @@ def run_toktx(input_path, output_path, options=None):
 
     cmd = [str(toktx_path)]
 
-    # Add encoding options
-    fmt = options.get('format', 'ETC1S')
-    if fmt == 'UASTC':
-        cmd.append('--uastc')
-        quality = options.get('quality', 2)
-        cmd.extend(['--uastc_quality', str(quality)])
-        # Enable RDO for better compression
-        cmd.append('--uastc_rdo')
+    target_format = options.get('target_format', 'BASISU')
+
+    if target_format == 'ASTC':
+        # Native ASTC compression - direct GPU upload on ASTC hardware
+        cmd.extend(['--encode', 'astc'])
+        block_size = options.get('astc_block_size', '6x6')
+        cmd.extend(['--astc_blk_d', block_size])
+        cmd.extend(['--astc_quality', 'medium'])
     else:
-        # ETC1S (default)
-        cmd.append('--bcmp')
-        quality = options.get('quality', 128)
-        cmd.extend(['--qlevel', str(quality)])
+        # Basis Universal (ETC1S or UASTC) - universal format
+        # Can be transcoded to BC7, ASTC, ETC2, etc. at runtime
+        fmt = options.get('format', 'ETC1S')
+        if fmt == 'UASTC':
+            cmd.extend(['--encode', 'uastc'])
+            quality = options.get('quality', 2)
+            cmd.extend(['--uastc_quality', str(quality)])
+        else:
+            # ETC1S (default)
+            cmd.extend(['--encode', 'etc1s'])
+            quality = options.get('quality', 128)
+            cmd.extend(['--qlevel', str(quality)])
 
     # Mipmaps
     if options.get('mipmaps', False):

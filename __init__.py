@@ -138,6 +138,16 @@ class KTX2ExportProperties(bpy.types.PropertyGroup):
         default=False
     )
 
+    target_format: bpy.props.EnumProperty(
+        name="Target Format",
+        description="GPU texture format. Native ASTC loads directly, Basis Universal transcodes at runtime",
+        items=[
+            ('BASISU', "Basis Universal", "Universal format that transcodes to any GPU (BC7, ASTC, ETC2, etc.) at runtime. Best compatibility"),
+            ('ASTC', "Native ASTC", "Direct GPU upload on ASTC hardware (mobile, Apple Silicon). No transcoding needed"),
+        ],
+        default='BASISU'
+    )
+
     compression_mode: bpy.props.EnumProperty(
         name="Compression",
         description="Basis Universal compression mode",
@@ -146,6 +156,18 @@ class KTX2ExportProperties(bpy.types.PropertyGroup):
             ('UASTC', "UASTC", "Larger files, higher quality. Best for normal maps and fine details"),
         ],
         default='ETC1S'
+    )
+
+    astc_block_size: bpy.props.EnumProperty(
+        name="ASTC Block Size",
+        description="ASTC compression block size. Smaller blocks = higher quality, larger files",
+        items=[
+            ('4x4', "4x4 (Highest Quality)", "8 bits/pixel - Best quality, largest files"),
+            ('5x5', "5x5 (High Quality)", "5.12 bits/pixel - High quality"),
+            ('6x6', "6x6 (Balanced)", "3.56 bits/pixel - Good balance of quality and size"),
+            ('8x8', "8x8 (Smaller Files)", "2 bits/pixel - Smaller files, lower quality"),
+        ],
+        default='6x6'
     )
 
     quality_level: bpy.props.IntProperty(
@@ -229,12 +251,19 @@ def draw_export(context, layout):
         if not check_tools_available():
             draw_install_tools_ui(body)
         else:
-            body.prop(props, 'compression_mode')
-            # Show appropriate quality range based on mode
-            if props.compression_mode == 'UASTC':
-                body.prop(props, 'quality_level', text="Quality (0-4)")
-            else:
-                body.prop(props, 'quality_level', text="Quality (1-255)")
+            body.prop(props, 'target_format')
+
+            # Show format-specific options
+            if props.target_format == 'BASISU':
+                body.prop(props, 'compression_mode')
+                # Show appropriate quality range based on mode
+                if props.compression_mode == 'UASTC':
+                    body.prop(props, 'quality_level', text="Quality (0-4)")
+                else:
+                    body.prop(props, 'quality_level', text="Quality (1-255)")
+            elif props.target_format == 'ASTC':
+                body.prop(props, 'astc_block_size')
+
             body.prop(props, 'generate_mipmaps')
             body.prop(props, 'create_fallback')
 
@@ -295,10 +324,12 @@ class glTF2ExportUserExtension:
             # Encode to KTX2
             ktx2_image = ktx2_encode.encode_image_to_ktx2(
                 source_image,
+                self.properties.target_format,
                 self.properties.compression_mode,
                 self.properties.quality_level,
                 self.properties.generate_mipmaps,
-                export_settings
+                export_settings,
+                astc_block_size=self.properties.astc_block_size
             )
             if ktx2_image is None:
                 export_settings['log'].warning(
