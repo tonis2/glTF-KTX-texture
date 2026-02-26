@@ -528,9 +528,11 @@ def run_toktx(input_path, output_path, options=None):
             - target_format: 'BASISU' or 'ASTC'
             - format: 'ETC1S' or 'UASTC' (for BASISU)
             - quality: 1-255 for ETC1S, 0-4 for UASTC
+            - compression: 0-5 for ETC1S, 1-22 for UASTC
             - mipmaps: bool
             - astc_block_size: '4x4', '5x5', '6x6', '8x8' (for ASTC)
-            - is_normal: True if texture is normal map (linear)
+            - oetf: Transfer function (linear|srgb)
+            - target_type: Target type (R, RG, RGB, RGBA)
 
     Returns:
         tuple: (success: bool, error_message: str or None)
@@ -557,6 +559,8 @@ def run_toktx(input_path, output_path, options=None):
         block_size = options.get('astc_block_size', '6x6')
         cmd.extend(['--astc_blk_d', block_size])
         cmd.extend(['--astc_quality', 'medium'])
+        compression = options.get('compression', 3)
+        cmd.extend(['--zcmp', str(compression)])
     else:
         # Basis Universal (ETC1S or UASTC) - universal format
         # Can be transcoded to BC7, ASTC, ETC2, etc. at runtime
@@ -565,16 +569,27 @@ def run_toktx(input_path, output_path, options=None):
             cmd.extend(['--encode', 'uastc'])
             quality = options.get('quality', 2)
             cmd.extend(['--uastc_quality', str(quality)])
+            compression = options.get('compression', 3)
+            cmd.extend(['--zcmp', str(compression)])
         else:
             # ETC1S (default)
             cmd.extend(['--encode', 'etc1s'])
             quality = options.get('quality', 128)
             cmd.extend(['--qlevel', str(quality)])
+            compression = options.get('compression', 1)
+            cmd.extend(['--clevel', str(compression)])
     
-    # Normal
-    if options.get('is_normal', False):
-        cmd.extend(['--target_type', 'RG'])
-        cmd.extend(['--assign_oetf', 'linear'])
+    # Transfer function
+    oetf = options.get('oetf', 'srgb')
+    cmd.extend(['--convert_oetf', oetf])
+
+    # Target type
+    target_type = options.get('target_type', 'RGBA')
+    cmd.extend(['--target_type', target_type])
+
+    # Scale
+    scale = options.get('scale', 1.0)
+    cmd.extend(['--scale', str(scale)])
 
     # Mipmaps
     if options.get('mipmaps', False):
@@ -583,6 +598,8 @@ def run_toktx(input_path, output_path, options=None):
     # Output and input
     cmd.append(str(output_path))
     cmd.append(str(input_path))
+
+    print(cmd)
 
     try:
         env = get_tool_environment()

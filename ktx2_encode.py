@@ -190,7 +190,7 @@ def save_blender_image_to_temp(blender_image, export_settings):
         return None
 
 
-def encode_image_to_ktx2(gltf_image, target_format, compression_mode, quality_level, generate_mipmaps, export_settings, astc_block_size='6x6', is_normal=False):
+def encode_image_to_ktx2(gltf_image, target_format, compression_mode, quality_level, compression_level, generate_mipmaps, export_settings, astc_block_size='6x6', oetf='srgb', target_type='RGBA', scale=1.0):
     """
     Encode a glTF image to KTX2 format.
 
@@ -199,10 +199,13 @@ def encode_image_to_ktx2(gltf_image, target_format, compression_mode, quality_le
         target_format: 'BASISU', 'BC7', 'ASTC', or 'ETC2'
         compression_mode: 'ETC1S' or 'UASTC' (for BASISU)
         quality_level: Quality level (1-255 for ETC1S, 0-4 for UASTC)
+        compression_level: Compression level (0-5 for ETC1S, 1-22 for UASTC)
         generate_mipmaps: Whether to generate mipmaps
         export_settings: Export settings dict
         astc_block_size: ASTC block size ('4x4', '5x5', '6x6', '8x8')
-        is_normal: True if texture is normal map (linear)
+        oetf: Transfer function (linear|srgb)
+        target_type: Target type (R, RG, RGB, RGBA)
+        scale: Scale factor pre compression
 
     Returns:
         gltf2_io.Image: New Image object with KTX2 data, or None on failure
@@ -227,10 +230,13 @@ def encode_image_to_ktx2(gltf_image, target_format, compression_mode, quality_le
         options = {
             'target_format': target_format,
             'format': compression_mode,
-            'quality': quality_level if compression_mode == 'ETC1S' else min(quality_level // 64, 4),
+            'quality': quality_level,
+            'compression': compression_level,
             'mipmaps': generate_mipmaps,
             'astc_block_size': astc_block_size,
-            'is_normal': is_normal,
+            'oetf': oetf,
+            'target_type': target_type,
+            'scale': scale,
         }
 
         # Log the target format for debugging
