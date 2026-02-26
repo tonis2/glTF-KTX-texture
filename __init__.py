@@ -436,7 +436,7 @@ class glTF2ExportUserExtension:
 
         # Get channels
         types = {1: 'R', 2: 'RG', 3: 'RGB', 4: 'RGBA'}
-        target_type = types.get(channels)
+        target_type = types.get(channels, 'RGBA')
         if not format_props.target_type == 'Auto':
             target_type = format_props.target_type
 
