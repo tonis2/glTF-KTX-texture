@@ -791,6 +791,31 @@ class glTF2ImportUserExtension:
             traceback.print_exc()
 
 
+_gltf_panel_register_retries = 0
+
+def _register_gltf_panels():
+    """Register UI panels with glTF addon, retrying via timer if not loaded yet."""
+    global _gltf_panel_register_retries
+    try:
+        from io_scene_gltf2 import exporter_extension_layout_draw, importer_extension_layout_draw
+        if 'KTX2 Textures' not in exporter_extension_layout_draw:
+            exporter_extension_layout_draw['KTX2 Textures'] = draw_export
+        if 'KTX2 Textures' not in importer_extension_layout_draw:
+            importer_extension_layout_draw['KTX2 Textures'] = draw_import
+        _gltf_panel_register_retries = 0
+        print("KTX2 Extension: Registered glTF export/import panels")
+    except (ImportError, AttributeError):
+        _gltf_panel_register_retries += 1
+        if _gltf_panel_register_retries <= 10:
+            bpy.app.timers.register(
+                lambda: _register_gltf_panels() or None,
+                first_interval=0.5
+            )
+        else:
+            _gltf_panel_register_retries = 0
+            print("KTX2 Extension: glTF-Blender-IO addon not found. KTX2 extension panels will not be available.")
+
+
 def register():
     """Register addon classes and UI."""
     # Reload submodules to pick up code changes (for development)
@@ -809,6 +834,8 @@ def register():
     bpy.types.Scene.KTX2ExportProperties = bpy.props.PointerProperty(type=KTX2ExportProperties)
     bpy.types.Scene.KTX2ImportProperties = bpy.props.PointerProperty(type=KTX2ImportProperties)
 
+    # Register UI panels with glTF addon (deferred to handle load order)
+    _register_gltf_panels()
 
     # Check tools availability on load
     check_tools_available()
@@ -816,6 +843,15 @@ def register():
 
 def unregister():
     """Unregister addon classes and UI."""
+    # Unregister UI panels from glTF addon
+    try:
+        from io_scene_gltf2 import exporter_extension_layout_draw, importer_extension_layout_draw
+        if 'KTX2 Textures' in exporter_extension_layout_draw:
+            del exporter_extension_layout_draw['KTX2 Textures']
+        if 'KTX2 Textures' in importer_extension_layout_draw:
+            del importer_extension_layout_draw['KTX2 Textures']
+    except (ImportError, KeyError):
+        pass
 
     del bpy.types.Scene.KTX2ExportProperties
     del bpy.types.Scene.KTX2ImportProperties
