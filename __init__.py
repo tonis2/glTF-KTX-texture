@@ -251,7 +251,7 @@ class KTX2ExportProperties(bpy.types.PropertyGroup):
     create_fallback: bpy.props.BoolProperty(
         name="Create Fallback",
         description="Keep original PNG/JPEG texture as fallback for viewers without KTX2 support",
-        default=True
+        default=False
     )
 
     generate_mipmaps: bpy.props.BoolProperty(
