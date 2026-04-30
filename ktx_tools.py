@@ -293,64 +293,141 @@ def extract_linux_archive(archive_path, tools_dir):
     return True
 
 
-def extract_windows_installer(installer_path, tools_dir):
-    """
-    Extract tools from Windows installer.
+# Direct download for the standalone reduced 7-Zip extractor (~600KB).
+# Only handles .7z archives, but enough to bootstrap the full 7za.exe.
+SEVEN_ZR_URL = "https://www.7-zip.org/a/7zr.exe"
 
-    The Windows .exe is an NSIS installer. We can extract it using 7z or
-    by running it silently, but that's complex. Instead, we'll try to
-    use the GitHub release assets which might have a zip.
+# 7-Zip "extras" archive contains the standalone 7za.exe needed to extract
+# the NSIS installer. Versioned URL — when 7-Zip releases a new version,
+# old URLs 404, so we try a list of known versions newest-first.
+SEVEN_ZIP_EXTRA_VERSIONS = ["2501", "2500", "2409", "2408", "2407"]
 
-    For now, we'll attempt to use 7z if available, otherwise provide instructions.
-    """
-    tools_dir.mkdir(parents=True, exist_ok=True)
 
-    # Try using 7z to extract (common on Windows)
-    seven_zip_paths = [
+def find_system_7zip():
+    """Locate an already-installed 7-Zip executable. Returns path or None."""
+    candidates = [
         r"C:\Program Files\7-Zip\7z.exe",
         r"C:\Program Files (x86)\7-Zip\7z.exe",
-        "7z",  # If in PATH
     ]
+    for p in candidates:
+        if os.path.isfile(p):
+            return p
+    for name in ("7z", "7za"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
 
-    seven_zip = None
-    for path in seven_zip_paths:
+
+def ensure_7zip_available(progress_callback=None):
+    """
+    Find or download a 7-Zip executable capable of extracting NSIS installers.
+
+    Strategy:
+      1. Use a system-installed 7-Zip if present.
+      2. Use a previously-cached 7za.exe in the addon's bin directory.
+      3. Bootstrap: download 7zr.exe, then download the 7-Zip extras .7z and
+         use 7zr to unpack 7za.exe out of it. Cache the result.
+
+    Returns:
+        str | None: Path to a 7-Zip executable, or None if unavailable.
+    """
+    sys_7z = find_system_7zip()
+    if sys_7z:
+        return sys_7z
+
+    tools_dir = get_tools_directory()
+    cached_7za = tools_dir / "7za.exe"
+    if cached_7za.is_file():
+        return str(cached_7za)
+
+    if progress_callback:
+        progress_callback("7-Zip not found - downloading portable 7-Zip...", 50)
+
+    tools_dir.mkdir(parents=True, exist_ok=True)
+    bootstrap_dir = tools_dir / "_7zip_bootstrap"
+    if bootstrap_dir.exists():
+        shutil.rmtree(bootstrap_dir, ignore_errors=True)
+    bootstrap_dir.mkdir(parents=True, exist_ok=True)
+
+    seven_zr = bootstrap_dir / "7zr.exe"
+    if not download_file(SEVEN_ZR_URL, seven_zr):
+        print("[KTX2] Failed to download 7zr.exe")
+        return None
+
+    # The 7-Zip extras archive is versioned and old versions 404 when a new
+    # release ships, so try newest-first.
+    extra_archive = bootstrap_dir / "7z-extra.7z"
+    extras_downloaded = False
+    for version in SEVEN_ZIP_EXTRA_VERSIONS:
+        url = f"https://www.7-zip.org/a/7z{version}-extra.7z"
+        print(f"[KTX2] Trying {url}")
+        if download_file(url, extra_archive):
+            extras_downloaded = True
+            break
+
+    if not extras_downloaded:
+        print("[KTX2] Could not download any 7-Zip extras archive")
+        return None
+
+    try:
+        result = subprocess.run(
+            [str(seven_zr), "x", str(extra_archive), f"-o{bootstrap_dir}", "-y"],
+            capture_output=True,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            print(f"[KTX2] 7zr extraction failed: {result.stderr.decode(errors='replace')}")
+            return None
+    except (subprocess.SubprocessError, OSError) as e:
+        print(f"[KTX2] Failed to run 7zr: {e}")
+        return None
+
+    extracted_7za = next(bootstrap_dir.rglob("7za.exe"), None)
+    if not extracted_7za:
+        print("[KTX2] 7za.exe not found inside extras archive")
+        return None
+
+    shutil.copy2(extracted_7za, cached_7za)
+    shutil.rmtree(bootstrap_dir, ignore_errors=True)
+    print(f"[KTX2] Cached portable 7-Zip at {cached_7za}")
+    return str(cached_7za)
+
+
+def extract_windows_installer(installer_path, tools_dir, progress_callback=None):
+    """Extract KTX tools from the Khronos Windows NSIS installer."""
+    tools_dir.mkdir(parents=True, exist_ok=True)
+
+    seven_zip = ensure_7zip_available(progress_callback)
+    if not seven_zip:
+        return False
+
+    with tempfile.TemporaryDirectory() as tmpdir:
         try:
-            result = subprocess.run([path, '--help'], capture_output=True, timeout=5)
-            if result.returncode == 0:
-                seven_zip = path
-                break
-        except (subprocess.SubprocessError, FileNotFoundError):
-            continue
+            result = subprocess.run(
+                [seven_zip, 'x', str(installer_path), f'-o{tmpdir}', '-y'],
+                capture_output=True,
+                timeout=120,
+            )
+            if result.returncode != 0:
+                print(f"[KTX2] 7-Zip extraction failed: {result.stderr.decode(errors='replace')}")
+                return False
 
-    if seven_zip:
-        # Extract using 7z
-        with tempfile.TemporaryDirectory() as tmpdir:
-            try:
-                subprocess.run(
-                    [seven_zip, 'x', str(installer_path), f'-o{tmpdir}', '-y'],
-                    capture_output=True,
-                    timeout=120
-                )
+            for root, dirs, files in os.walk(tmpdir):
+                for filename in files:
+                    if filename in ('toktx.exe', 'ktx.exe', 'ktxsc.exe', 'ktxinfo.exe'):
+                        src = Path(root) / filename
+                        dst = tools_dir / filename
+                        shutil.copy2(src, dst)
+                    elif filename.lower().endswith('.dll'):
+                        src = Path(root) / filename
+                        dst = tools_dir / filename
+                        shutil.copy2(src, dst)
 
-                # Find executables and DLLs
-                for root, dirs, files in os.walk(tmpdir):
-                    for filename in files:
-                        if filename in ('toktx.exe', 'ktx.exe', 'ktxsc.exe', 'ktxinfo.exe'):
-                            src = Path(root) / filename
-                            dst = tools_dir / filename
-                            shutil.copy2(src, dst)
-                        elif filename.lower().endswith('.dll'):
-                            src = Path(root) / filename
-                            dst = tools_dir / filename
-                            shutil.copy2(src, dst)
-
-                return (tools_dir / 'toktx.exe').exists()
-            except subprocess.SubprocessError:
-                pass
-
-    # Fallback: Try running installer silently (not ideal)
-    # For better UX, we should provide manual instructions
-    return False
+            return (tools_dir / 'toktx.exe').exists()
+        except subprocess.SubprocessError as e:
+            print(f"[KTX2] Failed to run 7-Zip: {e}")
+            return False
 
 
 def extract_macos_package(pkg_path, tools_dir):
@@ -462,7 +539,7 @@ def install_tools(progress_callback=None):
             if archive_type == 'tar.bz2':
                 success = extract_linux_archive(archive_path, tools_dir)
             elif archive_type == 'exe':
-                success = extract_windows_installer(archive_path, tools_dir)
+                success = extract_windows_installer(archive_path, tools_dir, progress_callback)
             elif archive_type == 'pkg':
                 success = extract_macos_package(archive_path, tools_dir)
             else:
