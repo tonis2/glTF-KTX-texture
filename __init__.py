@@ -794,16 +794,20 @@ class glTF2ImportUserExtension:
 _gltf_panel_register_retries = 0
 
 def _register_gltf_panels():
-    """Register UI panels with glTF addon, retrying via timer if not loaded yet."""
+    """Register the export UI panel with the glTF addon, retrying via timer if not loaded yet.
+
+    Note: the import panel is NOT registered here — io_scene_gltf2 auto-discovers
+    `draw_import` from any addon that defines glTF2ImportUserExtension(s) every time
+    the import dialog opens (see ImportGLTF2.invoke). Registering it manually would
+    cause the panel to appear twice.
+    """
     global _gltf_panel_register_retries
     try:
-        from io_scene_gltf2 import exporter_extension_layout_draw, importer_extension_layout_draw
+        from io_scene_gltf2 import exporter_extension_layout_draw
         if 'KTX2 Textures' not in exporter_extension_layout_draw:
             exporter_extension_layout_draw['KTX2 Textures'] = draw_export
-        if 'KTX2 Textures' not in importer_extension_layout_draw:
-            importer_extension_layout_draw['KTX2 Textures'] = draw_import
         _gltf_panel_register_retries = 0
-        print("KTX2 Extension: Registered glTF export/import panels")
+        print("KTX2 Extension: Registered glTF export panel")
     except (ImportError, AttributeError):
         _gltf_panel_register_retries += 1
         if _gltf_panel_register_retries <= 10:
@@ -843,13 +847,11 @@ def register():
 
 def unregister():
     """Unregister addon classes and UI."""
-    # Unregister UI panels from glTF addon
+    # Unregister export UI panel from glTF addon (import panel is auto-managed by glTF)
     try:
-        from io_scene_gltf2 import exporter_extension_layout_draw, importer_extension_layout_draw
+        from io_scene_gltf2 import exporter_extension_layout_draw
         if 'KTX2 Textures' in exporter_extension_layout_draw:
             del exporter_extension_layout_draw['KTX2 Textures']
-        if 'KTX2 Textures' in importer_extension_layout_draw:
-            del importer_extension_layout_draw['KTX2 Textures']
     except (ImportError, KeyError):
         pass
 
