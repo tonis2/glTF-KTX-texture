@@ -26,13 +26,30 @@ jobs:
         id: version
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            tag="${{ github.event.inputs.version }}"
           else
-            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+            tag="${GITHUB_REF#refs/tags/}"
           fi
+          # Strip leading 'v' for semver value used inside files
+          semver="${tag#v}"
+          echo "version=$tag" >> $GITHUB_OUTPUT
+          echo "semver=$semver" >> $GITHUB_OUTPUT
+
+      - name: Sync version into manifest and bl_info
+        run: |
+          semver="${{ steps.version.outputs.semver }}"
+          # blender_manifest.toml: version = "x.y.z"
+          sed -i -E "s/^version = \"[^\"]+\"/version = \"${semver}\"/" blender_manifest.toml
+          # __init__.py bl_info: "version": (x, y, z)
+          tuple_version=$(echo "$semver" | awk -F. '{printf "(%d, %d, %d)", $1, $2, ($3==""?0:$3)}')
+          sed -i -E "s/\"version\": \([0-9]+, [0-9]+, [0-9]+\)/\"version\": ${tuple_version}/" __init__.py
+          echo "--- blender_manifest.toml ---"
+          grep '^version' blender_manifest.toml
+          echo "--- __init__.py bl_info ---"
+          grep '"version":' __init__.py
 
       - name: Build Blender extension
-        run: |  
+        run: |
           zip -r gltf_ktx2_extension.zip ./* -x .claude -x "*.pyc" -x "bin/*" -x "example/*" -x "*/__pycache__/*" -x "*.sh"
 
       - name: Create Release
