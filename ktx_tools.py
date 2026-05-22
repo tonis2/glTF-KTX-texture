@@ -657,6 +657,9 @@ def run_toktx(input_path, output_path, options=None):
             if compression > 0:
                 cmd.extend(['--zcmp', str(compression)])
 
+            rdo = options.get('rdo', 0)
+            if rdo > 0:
+                cmd.extend(['--uastc_rdo_l', str(rdo)])
         else:
             # ETC1S (default)
             cmd.extend(['--encode', 'etc1s'])
