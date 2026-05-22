@@ -640,8 +640,10 @@ def run_toktx(input_path, output_path, options=None):
         block_size = options.get('astc_block_size', '6x6')
         cmd.extend(['--astc_blk_d', block_size])
         cmd.extend(['--astc_quality', 'medium'])
+
         compression = options.get('compression', 3)
-        cmd.extend(['--zcmp', str(compression)])
+        if compression > 0:
+            cmd.extend(['--zcmp', str(compression)])
     else:
         # Basis Universal (ETC1S or UASTC) - universal format
         # Can be transcoded to BC7, ASTC, ETC2, etc. at runtime
@@ -650,15 +652,20 @@ def run_toktx(input_path, output_path, options=None):
             cmd.extend(['--encode', 'uastc'])
             quality = options.get('quality', 2)
             cmd.extend(['--uastc_quality', str(quality)])
+
             compression = options.get('compression', 3)
-            cmd.extend(['--zcmp', str(compression)])
+            if compression > 0:
+                cmd.extend(['--zcmp', str(compression)])
+
         else:
             # ETC1S (default)
             cmd.extend(['--encode', 'etc1s'])
             quality = options.get('quality', 128)
             cmd.extend(['--qlevel', str(quality)])
+
             compression = options.get('compression', 1)
-            cmd.extend(['--clevel', str(compression)])
+            if compression > 0:
+                cmd.extend(['--clevel', str(compression)])
     
     # Transfer function
     oetf = options.get('oetf', 'srgb')

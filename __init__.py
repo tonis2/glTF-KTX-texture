@@ -156,8 +156,8 @@ class KTX2ExportCompressionUASTC(bpy.types.PropertyGroup):
     )
     compression_level: bpy.props.IntProperty(
         name="Compression",
-        description="UASTC: 1-22 (higher=better)",
-        min=1,
+        description="UASTC: 0-22 (higher=better)",
+        min=0,
         max=22,
         default=3
     )
