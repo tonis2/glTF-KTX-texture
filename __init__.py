@@ -156,8 +156,8 @@ class KTX2ExportCompressionUASTC(bpy.types.PropertyGroup):
     )
     compression_level: bpy.props.IntProperty(
         name="Compression",
-        description="UASTC: 1-22 (higher=better)",
-        min=1,
+        description="UASTC: 0-22 (higher=better)",
+        min=0,
         max=22,
         default=3
     )
@@ -231,6 +231,14 @@ class KTX2ExportFormat(bpy.types.PropertyGroup):
         min=1,
         max=4,
         default=1
+    )
+
+    rdo_factor: bpy.props.FloatProperty(
+        name="Rate Distortion Optimization (UASTC only)",
+        description="Reduces accuracy in exchange for significantly improved compression ratios (as much as 2x smaller)",
+        min=0,
+        max=10,
+        default=0
     )
 
     astc: bpy.props.PointerProperty(type=KTX2ExportFormatASTC)
@@ -319,6 +327,7 @@ def draw_format(body, props, name, display):
             if props.basisu.compression_mode == 'UASTC':
                 body.prop(props.basisu.uastc, 'quality_level')
                 body.prop(props.basisu.uastc, 'compression_level')
+                body.prop(props, 'rdo_factor')
             elif props.basisu.compression_mode == 'ETC1S':
                 body.prop(props.basisu.etc1s, 'quality_level')
                 body.prop(props.basisu.etc1s, 'compression_level')
@@ -470,6 +479,7 @@ class glTF2ExportUserExtension:
                 compression_mode,
                 quality_level,
                 compression_level,
+                format_props.rdo_factor,
                 self.properties.generate_mipmaps,
                 export_settings,
                 astc_block_size=format_props.astc.astc_block_size,

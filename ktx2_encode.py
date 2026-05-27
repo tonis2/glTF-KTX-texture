@@ -190,7 +190,7 @@ def save_blender_image_to_temp(blender_image, export_settings):
         return None
 
 
-def encode_image_to_ktx2(gltf_image, target_format, compression_mode, quality_level, compression_level, generate_mipmaps, export_settings, astc_block_size='6x6', oetf='srgb', target_type='RGBA', scale=1.0):
+def encode_image_to_ktx2(gltf_image, target_format, compression_mode, quality_level, compression_level, rdo_level, generate_mipmaps, export_settings, astc_block_size='6x6', oetf='srgb', target_type='RGBA', scale=1.0):
     """
     Encode a glTF image to KTX2 format.
 
@@ -200,6 +200,7 @@ def encode_image_to_ktx2(gltf_image, target_format, compression_mode, quality_le
         compression_mode: 'ETC1S' or 'UASTC' (for BASISU)
         quality_level: Quality level (1-255 for ETC1S, 0-4 for UASTC)
         compression_level: Compression level (0-5 for ETC1S, 1-22 for UASTC)
+        rdo_level: Rate Distortion Optimization level (0 - 10)
         generate_mipmaps: Whether to generate mipmaps
         export_settings: Export settings dict
         astc_block_size: ASTC block size ('4x4', '5x5', '6x6', '8x8')
@@ -232,6 +233,7 @@ def encode_image_to_ktx2(gltf_image, target_format, compression_mode, quality_le
             'format': compression_mode,
             'quality': quality_level,
             'compression': compression_level,
+            'rdo': rdo_level,
             'mipmaps': generate_mipmaps,
             'astc_block_size': astc_block_size,
             'oetf': oetf,
