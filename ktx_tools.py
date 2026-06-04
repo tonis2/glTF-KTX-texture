@@ -111,9 +111,45 @@ def get_tools_directory():
     return tools_dir
 
 
+def get_system_tool_path(exe_name):
+    """
+    Locate a KTX tool that is already installed system-wide.
+
+    Blender (especially on macOS) often launches with a minimal PATH that does
+    not include common install locations like /usr/local/bin, so we check those
+    directories explicitly in addition to PATH.
+
+    Args:
+        exe_name: Executable file name (e.g. 'toktx' or 'toktx.exe')
+
+    Returns:
+        Path: Full path to the executable, or None if not found
+    """
+    # First, honour PATH (covers custom installs and Homebrew on Intel macs).
+    found = shutil.which(exe_name)
+    if found:
+        return Path(found)
+
+    # Common locations Blender's stripped-down PATH usually misses.
+    candidate_dirs = [
+        '/usr/local/bin',      # KTX-Software .pkg default, Homebrew (Intel)
+        '/opt/homebrew/bin',   # Homebrew (Apple Silicon)
+        '/usr/bin',
+    ]
+    for directory in candidate_dirs:
+        candidate = Path(directory) / exe_name
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+
+    return None
+
+
 def get_tool_path(tool_name):
     """
     Get the full path to a KTX tool executable.
+
+    Prefers the addon-bundled tools, then falls back to a system-wide
+    installation (e.g. one installed via the KTX-Software .pkg or Homebrew).
 
     Args:
         tool_name: Name of the tool ('toktx', 'ktx', etc.)
@@ -134,7 +170,8 @@ def get_tool_path(tool_name):
     if tool_path.exists() and os.access(tool_path, os.X_OK):
         return tool_path
 
-    return None
+    # Fall back to a system-installed tool.
+    return get_system_tool_path(exe_name)
 
 
 def are_tools_installed():
@@ -430,6 +467,69 @@ def extract_windows_installer(installer_path, tools_dir, progress_callback=None)
             return False
 
 
+def _decode_pbzx(payload_path, output_path):
+    """
+    Decode an Apple pbzx-compressed payload into a raw cpio archive.
+
+    Modern macOS .pkg payloads are wrapped in the "pbzx" container: a sequence
+    of independently-xz-compressed chunks. gunzip cannot read these, which is
+    why the old gzip-only extraction failed. Returns True on success.
+    """
+    import struct
+    import lzma
+
+    with open(payload_path, 'rb') as src, open(output_path, 'wb') as dst:
+        magic = src.read(4)
+        if magic != b'pbzx':
+            return False
+
+        # Initial flags field (ignored; chunk sizes drive the loop).
+        src.read(8)
+
+        while True:
+            header = src.read(16)
+            if len(header) < 16:
+                break
+            # Each chunk is prefixed by uncompressed size and compressed size.
+            _uncompressed_size, compressed_size = struct.unpack('>QQ', header)
+            chunk = src.read(compressed_size)
+            if len(chunk) < compressed_size:
+                return False
+            if chunk[:6] == b'\xfd7zXZ\x00':
+                dst.write(lzma.decompress(chunk))
+            else:
+                # Stored chunk (not xz-compressed).
+                dst.write(chunk)
+
+    return True
+
+
+def _extract_cpio(cpio_path, extract_dir):
+    """Extract a raw cpio archive using whatever tool is available."""
+    # bsdtar (the default `tar` on macOS) reads cpio archives directly.
+    for cmd in (['tar', '-xf', str(cpio_path)],
+                ['cpio', '-id', '-I', str(cpio_path)]):
+        try:
+            result = subprocess.run(
+                cmd, cwd=str(extract_dir), capture_output=True, timeout=120
+            )
+            if result.returncode == 0:
+                return True
+        except (FileNotFoundError, subprocess.SubprocessError):
+            continue
+
+    # Last resort: pipe the cpio through stdin.
+    try:
+        with open(cpio_path, 'rb') as f:
+            result = subprocess.run(
+                ['cpio', '-id'], stdin=f, cwd=str(extract_dir),
+                capture_output=True, timeout=120
+            )
+            return result.returncode == 0
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return False
+
+
 def extract_macos_package(pkg_path, tools_dir):
     """Extract tools from macOS .pkg file."""
     tools_dir.mkdir(parents=True, exist_ok=True)
@@ -455,29 +555,33 @@ def extract_macos_package(pkg_path, tools_dir):
                     break
 
             if payload_path.exists():
-                # Extract payload (it's a cpio archive, possibly gzipped)
                 extract_dir = tmpdir / 'extracted'
                 extract_dir.mkdir()
 
-                # Try gunzip + cpio
-                try:
-                    with subprocess.Popen(
-                        ['gunzip', '-c', str(payload_path)],
-                        stdout=subprocess.PIPE
-                    ) as gunzip:
-                        subprocess.run(
-                            ['cpio', '-id'],
-                            stdin=gunzip.stdout,
-                            cwd=str(extract_dir),
-                            capture_output=True,
-                            timeout=60
-                        )
-                except FileNotFoundError:
-                    # gunzip not available, try with Python gzip
+                # Inspect the payload's magic bytes to pick a decoder.
+                with open(payload_path, 'rb') as f:
+                    magic = f.read(4)
+
+                extracted = False
+                if magic == b'pbzx':
+                    # Modern xz-wrapped payload.
+                    cpio_path = tmpdir / 'payload.cpio'
+                    if _decode_pbzx(payload_path, cpio_path):
+                        extracted = _extract_cpio(cpio_path, extract_dir)
+                elif magic[:2] == b'\x1f\x8b':
+                    # Legacy gzip-compressed cpio.
                     import gzip
-                    with gzip.open(payload_path, 'rb') as f:
-                        # This is more complex, skip for now
-                        pass
+                    cpio_path = tmpdir / 'payload.cpio'
+                    with gzip.open(payload_path, 'rb') as gz, open(cpio_path, 'wb') as out:
+                        shutil.copyfileobj(gz, out)
+                    extracted = _extract_cpio(cpio_path, extract_dir)
+                else:
+                    # Uncompressed cpio (or something tar/cpio can read directly).
+                    extracted = _extract_cpio(payload_path, extract_dir)
+
+                if not extracted:
+                    print("[KTX2] Failed to extract macOS payload")
+                    return False
 
                 # Find and copy tools
                 for root, dirs, files in os.walk(extract_dir):
@@ -507,6 +611,14 @@ def install_tools(progress_callback=None):
         tuple: (success: bool, error_message: str or None)
     """
     os_name, arch = get_platform_info()
+
+    # If the tools are already available system-wide (e.g. installed via the
+    # KTX-Software .pkg or Homebrew), there's nothing to download.
+    if are_tools_installed():
+        if progress_callback:
+            progress_callback("KTX tools already available!", 100)
+        return True, None
+
     url, archive_type, _ = get_download_info()
 
     if url is None:
