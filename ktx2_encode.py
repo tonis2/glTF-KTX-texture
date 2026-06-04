@@ -190,7 +190,7 @@ def save_blender_image_to_temp(blender_image, export_settings):
         return None
 
 
-def encode_image_to_ktx2(gltf_image, target_format, compression_mode, quality_level, compression_level, rdo_level, generate_mipmaps, export_settings, astc_block_size='6x6', oetf='srgb', target_type='RGBA', scale=1.0):
+def encode_image_to_ktx2(gltf_image, target_format, compression_mode, quality_level, compression_level, rdo_level, generate_mipmaps, export_settings, astc_block_size='6x6', oetf='srgb', target_type='RGBA', scale=1.0, normal_mode=False, normal_two_channel=False):
     """
     Encode a glTF image to KTX2 format.
 
@@ -239,6 +239,8 @@ def encode_image_to_ktx2(gltf_image, target_format, compression_mode, quality_le
             'oetf': oetf,
             'target_type': target_type,
             'scale': scale,
+            'normal_mode': normal_mode,
+            'normal_two_channel': normal_two_channel,
         }
 
         # Log the target format for debugging

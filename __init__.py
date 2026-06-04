@@ -241,6 +241,19 @@ class KTX2ExportFormat(bpy.types.PropertyGroup):
         default=0
     )
 
+    # Normal-map-only options (shown only for the Normal texture slot)
+    normal_mode: bpy.props.BoolProperty(
+        name="Use Normal Mode",
+        description="Tune the encoder for normal maps (toktx --normal_mode): disables RDO for ETC1S and tunes ASTC parameters for better quality",
+        default=True
+    )
+
+    normal_two_channel: bpy.props.BoolProperty(
+        name="Reduce to 2 Channels (X+Y)",
+        description="Store only X+Y (RGB=X, A=Y) for smaller, higher-quality normals. Requires the viewer to reconstruct Z in the shader - many glTF viewers (and this addon's importer) don't, so leave off for maximum compatibility",
+        default=False
+    )
+
     astc: bpy.props.PointerProperty(type=KTX2ExportFormatASTC)
     basisu: bpy.props.PointerProperty(type=KTX2ExportFormatBASISU)
 
@@ -336,6 +349,11 @@ def draw_format(body, props, name, display):
         body.prop(props, 'target_type')
         body.prop(props, 'target_oetf')
         body.prop(props, 'downsample_factor')
+        if name == 'normal':
+            body.prop(props, 'normal_mode')
+            row = body.row()
+            row.enabled = props.normal_mode
+            row.prop(props, 'normal_two_channel')
 
 def draw_export(context, layout):
     """Draw export UI panel."""
@@ -473,6 +491,11 @@ class glTF2ExportUserExtension:
                 quality_level = format_props.basisu.etc1s.quality_level
                 compression_level = format_props.basisu.etc1s.compression_level
 
+            # Normal maps benefit from toktx's --normal_mode encoding
+            is_normal = "Normal" in socket_names
+            normal_mode = is_normal and format_props.normal_mode
+            normal_two_channel = normal_mode and format_props.normal_two_channel
+
             ktx2_image = ktx2_encode.encode_image_to_ktx2(
                 source_image,
                 format_props.target_format,
@@ -485,7 +508,9 @@ class glTF2ExportUserExtension:
                 astc_block_size=format_props.astc.astc_block_size,
                 oetf=oetf,
                 target_type=target_type,
-                scale = 1.0 / format_props.downsample_factor
+                scale = 1.0 / format_props.downsample_factor,
+                normal_mode=normal_mode,
+                normal_two_channel=normal_two_channel
             )
             if ktx2_image is None:
                 export_settings['log'].warning(

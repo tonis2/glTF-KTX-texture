@@ -726,6 +726,9 @@ def run_toktx(input_path, output_path, options=None):
             - astc_block_size: '4x4', '5x5', '6x6', '8x8' (for ASTC)
             - oetf: Transfer function (linear|srgb)
             - target_type: Target type (R, RG, RGB, RGBA)
+            - normal_mode: Encode as a normal map (toktx --normal_mode)
+            - normal_two_channel: Store normals as 2-component X+Y (needs shader
+              Z-reconstruction); when False a standard 3-channel map is kept
 
     Returns:
         tuple: (success: bool, error_message: str or None)
@@ -782,13 +785,28 @@ def run_toktx(input_path, output_path, options=None):
             if compression > 0:
                 cmd.extend(['--clevel', str(compression)])
     
+    # Normal map mode - tunes the encoder for normal maps (requires linear input)
+    normal_mode = options.get('normal_mode', False)
+    normal_two_channel = options.get('normal_two_channel', False)
+    if normal_mode:
+        cmd.append('--normal_mode')
+
     # Transfer function
     oetf = options.get('oetf', 'srgb')
     cmd.extend(['--assign_oetf', oetf])
 
     # Target type
-    target_type = options.get('target_type', 'RGBA')
-    cmd.extend(['--target_type', target_type])
+    if normal_mode and normal_two_channel:
+        # Let toktx store its optimized 2-component X+Y normal map (RGB=X, A=Y).
+        # Forcing --target_type would drop the Y component, so omit it here.
+        pass
+    else:
+        if normal_mode:
+            # Keep a standard 3-channel normal map: rgb1 prevents the default
+            # 2-component conversion while still applying the normal-tuned encoder.
+            cmd.extend(['--input_swizzle', 'rgb1'])
+        target_type = options.get('target_type', 'RGBA')
+        cmd.extend(['--target_type', target_type])
 
     # Scale
     scale = options.get('scale', 1.0)
