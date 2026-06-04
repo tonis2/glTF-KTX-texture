@@ -559,16 +559,34 @@ class glTF2ExportUserExtension:
 
         # Create the KTX2 image for the cubemap
         if export_settings['gltf_format'] == 'GLTF_SEPARATE':
-            # For separate files, write KTX2 file directly and use filename as URI
+            # For separate files, write the KTX2 file into the configured texture
+            # directory and reference it relative to the .gltf file.
             import os
-            filepath = export_settings.get('gltf_filepath', '')
-            output_dir = os.path.dirname(filepath)
+            file_dir = export_settings.get('gltf_filedirectory')
+            if not file_dir:
+                file_dir = os.path.dirname(export_settings.get('gltf_filepath', ''))
+            output_dir = export_settings.get('gltf_texturedirectory') or file_dir
+
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+
             ktx2_filename = "environment_cubemap.ktx2"
-            ktx2_filepath = os.path.join(output_dir, ktx2_filename)
+            ktx2_filepath = os.path.join(output_dir, ktx2_filename) if output_dir else ktx2_filename
 
             # Write KTX2 file
             with open(ktx2_filepath, 'wb') as f:
                 f.write(ktx2_bytes)
+
+            # URI relative to the .gltf file, matching base exporter behaviour.
+            if file_dir:
+                rel_path = os.path.relpath(ktx2_filepath, start=file_dir)
+            else:
+                rel_path = ktx2_filename
+            try:
+                from io_scene_gltf2.io.com.path import path_to_uri
+                env_uri = path_to_uri(rel_path)
+            except ImportError:
+                env_uri = rel_path.replace(os.sep, '/')
 
             env_image = gltf2_io.Image(
                 buffer_view=None,
@@ -576,7 +594,7 @@ class glTF2ExportUserExtension:
                 extras=None,
                 mime_type="image/ktx2",
                 name="environment_cubemap",
-                uri=ktx2_filename
+                uri=env_uri
             )
         else:
             # For GLB/embedded formats, we must use base64 data URI

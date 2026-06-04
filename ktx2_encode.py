@@ -268,9 +268,16 @@ def encode_image_to_ktx2(gltf_image, target_format, compression_mode, quality_le
             name = name.rsplit('.', 1)[0]
 
         if export_settings['gltf_format'] == 'GLTF_SEPARATE':
-            # For separate files, write KTX2 file directly and use filename as URI
-            filepath = export_settings.get('gltf_filepath', '')
-            output_dir = os.path.dirname(filepath)
+            # For separate files, write the KTX2 file into the texture directory
+            # configured in the base glTF exporter ("Textures" relative path),
+            # and reference it with a URI relative to the .gltf file.
+            file_dir = export_settings.get('gltf_filedirectory')
+            if not file_dir:
+                file_dir = os.path.dirname(export_settings.get('gltf_filepath', ''))
+
+            # gltf_texturedirectory already resolves the relative "Textures" path
+            # against the output directory; fall back to the .gltf directory.
+            output_dir = export_settings.get('gltf_texturedirectory') or file_dir
 
             # Ensure output directory exists (might not be created yet at this stage)
             if output_dir:
@@ -295,13 +302,26 @@ def encode_image_to_ktx2(gltf_image, target_format, compression_mode, quality_le
             with open(ktx2_filepath, 'wb') as f:
                 f.write(ktx2_bytes)
 
+            # Build the URI relative to the .gltf file, matching how the base
+            # exporter references PNG/JPEG textures.
+            if file_dir:
+                rel_path = os.path.relpath(ktx2_filepath, start=file_dir)
+            else:
+                rel_path = ktx2_filename
+
+            try:
+                from io_scene_gltf2.io.com.path import path_to_uri
+                ktx2_uri = path_to_uri(rel_path)
+            except ImportError:
+                ktx2_uri = rel_path.replace(os.sep, '/')
+
             ktx2_image = gltf2_io.Image(
                 buffer_view=None,
                 extensions=None,
                 extras=None,
                 mime_type="image/ktx2",
                 name=name,
-                uri=ktx2_filename
+                uri=ktx2_uri
             )
         else:
             # For embedded (GLB), use buffer_view
