@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "gltf_ktx2_texture_extension"
-version = "1.0.6"
+version = "1.0.7"
 name = "glTF KTX2 Texture Extension"
 tagline = "Add KTX2 texture support via KHR_texture_basisu extension"
 maintainer = "glTF-Blender-IO Contributors"
