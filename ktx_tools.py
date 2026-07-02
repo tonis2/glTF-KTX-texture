@@ -546,16 +546,16 @@ def extract_macos_package(pkg_path, tools_dir):
                 timeout=60
             )
 
-            # Find and extract the payload
-            payload_path = tmpdir / 'expanded' / 'ktx-tools.pkg' / 'Payload'
-            if not payload_path.exists():
-                # Try alternative structure
-                for p in (tmpdir / 'expanded').rglob('Payload'):
-                    payload_path = p
-                    break
+            # The .pkg is a "product archive" containing multiple component
+            # packages (e.g. *-tools.pkg, *-library.pkg, *-jni.pkg, *-dev.pkg).
+            # The CLI executables live in *-tools.pkg while libktx.dylib lives
+            # in *-library.pkg, so we need to extract both. Picking just the
+            # first Payload found via an unordered scan would silently grab
+            # the wrong (or an incomplete) component.
+            payload_paths = list((tmpdir / 'expanded').rglob('Payload'))
 
-            if payload_path.exists():
-                extract_dir = tmpdir / 'extracted'
+            for payload_path in payload_paths:
+                extract_dir = tmpdir / f'extracted_{payload_path.parent.name}'
                 extract_dir.mkdir()
 
                 # Inspect the payload's magic bytes to pick a decoder.
@@ -565,13 +565,13 @@ def extract_macos_package(pkg_path, tools_dir):
                 extracted = False
                 if magic == b'pbzx':
                     # Modern xz-wrapped payload.
-                    cpio_path = tmpdir / 'payload.cpio'
+                    cpio_path = tmpdir / f'{payload_path.parent.name}.cpio'
                     if _decode_pbzx(payload_path, cpio_path):
                         extracted = _extract_cpio(cpio_path, extract_dir)
                 elif magic[:2] == b'\x1f\x8b':
                     # Legacy gzip-compressed cpio.
                     import gzip
-                    cpio_path = tmpdir / 'payload.cpio'
+                    cpio_path = tmpdir / f'{payload_path.parent.name}.cpio'
                     with gzip.open(payload_path, 'rb') as gz, open(cpio_path, 'wb') as out:
                         shutil.copyfileobj(gz, out)
                     extracted = _extract_cpio(cpio_path, extract_dir)
@@ -580,10 +580,14 @@ def extract_macos_package(pkg_path, tools_dir):
                     extracted = _extract_cpio(payload_path, extract_dir)
 
                 if not extracted:
-                    print("[KTX2] Failed to extract macOS payload")
-                    return False
+                    print(f"[KTX2] Failed to extract macOS payload from {payload_path.parent.name}")
+                    continue
 
-                # Find and copy tools
+                # Find and copy tools and the shared library they depend on.
+                # The official binaries are signed with the hardened runtime,
+                # which causes macOS to strip DYLD_LIBRARY_PATH at launch, so
+                # the only rpath entry that actually resolves is
+                # @executable_path - the dylib must sit next to the exe.
                 for root, dirs, files in os.walk(extract_dir):
                     for filename in files:
                         if filename in ('toktx', 'ktx', 'ktxsc', 'ktxinfo'):
@@ -591,8 +595,15 @@ def extract_macos_package(pkg_path, tools_dir):
                             dst = tools_dir / filename
                             shutil.copy2(src, dst)
                             os.chmod(dst, 0o755)
+                        elif filename.startswith('libktx') and '.dylib' in filename:
+                            src = Path(root) / filename
+                            dst = tools_dir / filename
+                            shutil.copy2(src, dst)
 
-                return (tools_dir / 'toktx').exists()
+            if (tools_dir / 'toktx').exists():
+                return True
+
+            print("[KTX2] Could not find toktx in any component of the macOS package")
 
         except subprocess.SubprocessError as e:
             print(f"Failed to extract macOS package: {e}")
